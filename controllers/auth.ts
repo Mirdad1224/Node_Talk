@@ -101,3 +101,40 @@ export const login = async (
     next(err);
   }
 };
+
+export const refresh = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const cookies = req.cookies;
+
+  try {
+    if (!cookies?.jwt) {
+      errorGenerate("Unauthorized", 401);
+    }
+    const refreshToken = cookies.jwt;
+    const decoded = jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET?.toString()!
+    ) as { email: string };
+    if (!decoded || !decoded.email) {
+      errorGenerate("Forbidden", 403);
+    }
+    const foundUser = await User.findOne({
+      email: decoded.email,
+    }).exec();
+    if (!foundUser) {
+      errorGenerate("Unauthorized", 401);
+    }
+    const accessToken = jwt.sign(
+      { email: foundUser!.email },
+      process.env.ACCESS_TOKEN_SECRET?.toString()!,
+      { expiresIn: "15m" }
+    );
+
+    res.json({ accessToken });
+  } catch (err) {
+    next(err);
+  }
+};
