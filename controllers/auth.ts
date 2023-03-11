@@ -1,9 +1,12 @@
-import User from "../models/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { NextFunction, Request, Response } from "express";
+
+import User from "../models/User";
+import Social from "../models/Social";
 import checkCredential from "../validators/register";
 import errorGenerate from "../utils/errorGenerate";
+import checkSocial from "../validators/social";
 
 export const register = async (
   req: Request,
@@ -165,6 +168,66 @@ export const logout = async (
     const result = await foundUser.save();
     res.clearCookie("jwt", { httpOnly: true, sameSite: "none", secure: true }); //*
     res.json({ message: "Cookie cleared" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const social = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const { username, email, profileUrl } = req.body;
+  if (!username || !profileUrl || !email)
+    return res
+      .status(400)
+      .json({ message: "Your received data is wrong.Please send valid data" });
+
+  try {
+    const checkData = await checkSocial({ email, username, profileUrl });
+    if (checkData !== true) {
+      errorGenerate("Invalid Inputs", 400, checkData);
+    }
+    let foundUser = await User.findOne({ email }).exec();
+    if (!foundUser) {
+      foundUser = await User.create({
+        email: email,
+        name: username,
+        image: profileUrl,
+      });
+      await Social.create({ username, profileUrl, userId: foundUser._id });
+    }
+    const accessToken = jwt.sign(
+      { email: foundUser!.email },
+      process.env.ACCESS_TOKEN_SECRET?.toString()!,
+      { expiresIn: "15m" }
+    );
+
+    const refreshToken = jwt.sign(
+      { email: foundUser!.email },
+      process.env.REFRESH_TOKEN_SECRET?.toString()!,
+      { expiresIn: "7d" }
+    );
+
+    // Saving refreshToken with current user
+    foundUser!.refreshToken = refreshToken;
+    const result = await foundUser!.save();
+
+    if (!result) {
+      errorGenerate("Users credentials was not saved.Try again...");
+    }
+
+    // Create secure cookie with refresh token
+    res.cookie("jwt", refreshToken, {
+      httpOnly: true, //accessible only by web server
+      secure: true, //https
+      sameSite: "none", //cross-site cookie
+      maxAge: 7 * 24 * 60 * 60 * 1000, //cookie expiry: set to match rT
+    });
+
+    // Send accessToken
+    res.json({ accessToken });
   } catch (err) {
     next(err);
   }
