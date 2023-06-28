@@ -1,38 +1,148 @@
-import mongoose from "mongoose";
-import IUser from "../types/IUser";
+import mongoose, { Model } from "mongoose";
+import bcrypt from "bcrypt";
+import crypto from "crypto";
+import IUser, { IUserMethods } from "../types/IUser";
 
-const userSchema = new mongoose.Schema<IUser>(
-  {
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-    },
-    password: {
-      type: String,
-      minlength: 8,
-      maxlength: 255,
-    },
-    name: {
-      type: String,
-      trim: true,
-      minlength: 3,
-      maxlength: 255,
-    },
-    image: {
-      type: String,
-    },
-    phone: { type: String, minlength: 10 },
-    conversations: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Conversation",
-      },
-    ],
-    refreshToken: String,
+type UserModel = Model<IUser, {}, IUserMethods>;
+
+const userSchema = new mongoose.Schema<IUser, UserModel, IUserMethods>({
+  firstName: {
+    type: String,
+    required: [true, "First Name is required"],
   },
-  { timestamps: true }
-);
+  lastName: {
+    type: String,
+    required: [true, "Last Name is required"],
+  },
+  avatar: {
+    type: String,
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+  },
+  password: {
+    type: String,
+    minlength: 8,
+    maxlength: 255,
+  },
+  passwordChangedAt: {
+    // unselect
+    type: Date,
+  },
+  passwordResetToken: {
+    // unselect
+    type: String,
+  },
+  passwordResetExpires: {
+    // unselect
+    type: Date,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now(),
+  },
+  updatedAt: {
+    // unselect
+    type: Date,
+  },
+  verified: {
+    type: Boolean,
+    default: false,
+  },
+  otp: {
+    type: String,
+  },
+  otp_expiry_time: {
+    type: Date,
+  },
+  friends: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+  ],
+  socket_id: {
+    type: String,
+  },
+  status: {
+    type: String,
+    enum: ["Online", "Offline"],
+  },
+});
 
-export default mongoose.model<IUser>("User", userSchema);
+userSchema.pre("save", async function (next) {
+  // Only run this function if password was actually modified
+  if (!this.isModified("otp") || !this.otp) return next();
+
+  // Hash the otp with cost of 12
+  this.otp = await bcrypt.hash(this.otp.toString(), 12);
+
+  console.log(this.otp.toString(), "FROM PRE SAVE HOOK");
+
+  next();
+});
+
+userSchema.pre("save", async function (next) {
+  // Only run this function if password was actually modified
+  if (!this.isModified("password") || !this.password) return next();
+
+  // Hash the password with cost of 12
+  this.password = await bcrypt.hash(this.password, 12);
+
+  //! Shift it to next hook // this.passwordChangedAt = Date.now() - 1000;
+
+  next();
+});
+
+userSchema.pre("save", function (next) {
+  if (!this.isModified("password") || this.isNew || !this.password)
+    return next();
+
+  this.passwordChangedAt = Date.now() - 1000;
+  next();
+});
+
+userSchema.methods.correctPassword = async function (
+  candidatePassword: string,
+  userPassword: string
+) {
+  return await bcrypt.compare(candidatePassword, userPassword);
+};
+
+userSchema.methods.correctOTP = async function (
+  candidateOTP: string,
+  userOTP: string
+) {
+  return await bcrypt.compare(candidateOTP, userOTP);
+};
+
+userSchema.methods.changedPasswordAfter = function (JWTTimeStamp: number) {
+  if (this.passwordChangedAt) {
+    const changedTimeStamp = parseInt(
+      (this.passwordChangedAt.getTime() / 1000).toString(),
+      10
+    );
+    return JWTTimeStamp < changedTimeStamp;
+  }
+
+  // FALSE MEANS NOT CHANGED
+  return false;
+};
+
+userSchema.methods.createPasswordResetToken = function () {
+  const resetToken = crypto.randomBytes(32).toString("hex");
+
+  this.passwordResetToken = crypto
+    .createHash("sha256")
+    .update(resetToken)
+    .digest("hex");
+
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000;
+
+  return resetToken;
+};
+
+export default mongoose.model<IUser, UserModel>("User", userSchema);
